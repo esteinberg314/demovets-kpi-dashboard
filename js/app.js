@@ -43,7 +43,7 @@
     unfilledDemand: { label: "Unfilled Demand $", fmt: F.money, kind: "money", good: -1 },
     paidIdleCost: { label: "Paid Idle Cost", fmt: F.money, kind: "money", good: -1 },
     cancellationRate: { label: "Cancellation Rate", fmt: F.pct, kind: "rate", good: -1 },
-    revenuePerWorkedDay: { label: "Revenue / Worked Day", fmt: F.money, kind: "ratio", good: 1 },
+    revenuePerWorkedDay: { label: "Revenue / Worked Day", fmt: (v) => (v == null || !isFinite(v) ? "—" : "$" + Math.round(v).toLocaleString()), kind: "ratio", good: 1 },
     workedDays: { label: "Worked Days", fmt: F.num, kind: "money", good: 1 },
     activeVets: { label: "Active Vets", fmt: F.num, kind: "headcount", good: 1 },
   };
