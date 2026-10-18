@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>KPI Validation</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; color: #284854; background: #fff; }
+  table { border-collapse: collapse; margin: 12px 0 28px; }
+  th, td { border: 1px solid #d6e3e5; padding: 4px 10px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { background: #EFF8F8; }
+  .ok { color: #2e7d32; font-weight: 600; } .bad { color: #c62828; font-weight: 600; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="js/labels.js"></script>
+<script src="js/kpis.js"></script>
+</head>
+<body>
+<h1>KPI validation harness</h1>
+<p>Runs the same <code>js/kpis.js</code> module the dashboard uses against the files in <code>data/manifest.json</code>
+(plus any <code>?extra=</code> file).</p>
+<div id="out">Loading…</div>
+<script>
+(async function () {
+  const fmt$ = (v) => "$" + (v / 1e6).toFixed(2) + "M";
+  const pct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
+  const manifest = await (await fetch("data/manifest.json", { cache: "no-store" })).json();
+  const files = manifest.files.map((f) => "data/" + f);
+  const extra = new URLSearchParams(location.search).get("extra");
+  if (extra) files.push(extra);
+  const parsed = await Promise.all(files.map(async (f) => {
+    const text = await (await fetch(f, { cache: "no-store" })).text();
+    return Papa.parse(text, { header: true, skipEmptyLines: true }).data;
+  }));
+  const { rows, duplicatesRemoved } = KPI.combine(parsed);
+  const sched = KPI.ofType(rows, "SCHEDULE");
+  const q3 = sched.filter((r) => r.month >= "2026-07" && r.month <= "2026-09");
+  const k = KPI.scheduleKpis(q3);
+  const markets = new Set(q3.map((r) => r.market)).size;
+
+  const checks = [
+    ["Revenue", "≈ $8.73M", fmt$(k.revenue), Math.abs(k.revenue - 8.73e6) < 0.01e6],
+    ["Gross margin %", "≈ 24.0%", pct(k.grossMarginPct), Math.abs(k.grossMarginPct - 0.240) < 0.0005],
+    ["Utilization", "≈ 84.9%", pct(k.utilization), Math.abs(k.utilization - 0.849) < 0.0005],
+    ["Fill rate", "≈ 81.3%", pct(k.fillRate), Math.abs(k.fillRate - 0.813) < 0.0005],
+    ["Active vets", "168", k.activeVets, k.activeVets === 168],
+    ["Markets", "10", markets, markets === 10],
+  ];
+
+  // Storyline checks (README "Built-in storylines")
+  const by = (rs, f) => KPI.groupBy(rs, f);
+  const months = [...new Set(sched.map((r) => r.month))].filter((m) => m >= "2026-07").sort();
+  const mk = (m) => sched.filter((r) => r.market === m);
+  const perMonth = (rs, fn) => months.map((mo) => fn(rs.filter((r) => r.month === mo)));
+  const bv = KPI.budgetVariance(rows);
+  const story = [];
+  story.push(["Atlanta utilization", ...perMonth(mk("Atlanta"), KPI.utilization).map(pct)]);
+  story.push(["Atlanta gross margin %", ...perMonth(mk("Atlanta"), KPI.grossMarginPct).map(pct)]);
+  story.push(["Boston fill rate", ...perMonth(mk("Boston"), KPI.fillRate).map(pct)]);
+  story.push(["Boston revenue vs budget", ...months.map((mo) => pct((bv.find((b) => b.market === "Boston" && b.month === mo) || {}).revenueVarPct))]);
+  story.push(["Denver revenue vs budget", ...months.map((mo) => pct((bv.find((b) => b.market === "Denver" && b.month === mo) || {}).revenueVarPct))]);
+  story.push(["Denver utilization", ...perMonth(mk("Denver"), KPI.utilization).map(pct)]);
+  story.push(["KC Driftwood cancel rate", ...perMonth(mk("Kansas City").filter((r) => r.corporate_group === "Driftwood Vet Partners"), KPI.cancellationRate).map(pct)]);
+  story.push(["KC utilization", ...perMonth(mk("Kansas City"), KPI.utilization).map(pct)]);
+  story.push(["KC gross margin %", ...perMonth(mk("Kansas City"), KPI.grossMarginPct).map(pct)]);
+  story.push(["Aldergrove revenue share", ...perMonth(sched, (rs) => (KPI.concentration(rs).find((c) => c.group === "Aldergrove Veterinary Group") || {}).share).map(pct)]);
+  story.push(["PTO days (all)", ...perMonth(sched, (rs) => rs.filter((r) => r.shift_status === "PTO").length)]);
+  const er = q3.filter((r) => r.shift_type && r.shift_type.startsWith("ER"));
+  const extraStats = [
+    ["ER fill rate (Q3)", pct(KPI.fillRate(er))],
+    ["Median lead time, unfilled (Q3)", KPI.medianLeadTime(q3, "Unfilled Request") + " days"],
+    ["Median lead time, filled/worked (Q3)", KPI.medianLeadTime(q3, "Worked") + " days"],
+    ["Unfilled demand (Q3)", fmt$(k.unfilledDemand)],
+    ["Paid idle cost (Q3)", fmt$(k.paidIdleCost)],
+    ["Cancellation rate (Q3)", pct(k.cancellationRate)],
+    ["Revenue / worked day (Q3)", "$" + k.revenuePerWorkedDay.toFixed(0)],
+    ["Rows loaded / duplicates removed", rows.length + " / " + duplicatesRemoved],
+    ["Latest record_date", KPI.latestDate(rows)],
+  ];
+  const vf = KPI.vetFunnel(KPI.ofType(rows, "VET_PIPELINE"));
+  const sf = KPI.salesFunnel(KPI.ofType(rows, "HOSPITAL_PIPELINE"));
+
+  const table = (head, body) => "<table><tr>" + head.map((h) => `<th>${h}</th>`).join("") + "</tr>" +
+    body.map((r) => "<tr>" + r.map((c) => `<td>${c}</td>`).join("") + "</tr>").join("") + "</table>";
+  document.getElementById("out").innerHTML =
+    "<h2>Q3 headline vs README</h2>" +
+    table(["KPI", "README", "Computed", "Match"], checks.map(([a, b, c, ok]) => [a, b, c, `<span class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"}</span>`])) +
+    "<h2>Storylines by month</h2>" + table(["Metric", ...months], story) +
+    "<h2>Other</h2>" + table(["Metric", "Value"], extraStats) +
+    "<h2>Vet funnel</h2>" + table(["Stage", "Count"], vf.stages.map((s) => [s.stage, s.count])) +
+    table(["Metric", "Value"], [["Offer acceptance", pct(vf.offerAcceptanceRate)], ["Hires (" + KPI.HIRE_DEF + ")", vf.hires], ["Recruiting cost", fmt$(vf.recruitingCost)], ["Cost per hire", "$" + Math.round(vf.costPerHire).toLocaleString()]]) +
+    "<h2>Sales funnel</h2>" + table(["Stage", "Count"], sf.stages.map((s) => [s.stage, s.count]).concat([["Closed - Lost", sf.lost]])) +
+    table(["Metric", "Value"], [["Win rate", pct(sf.winRate)], ["Live by month", JSON.stringify(sf.liveByMonth)]]);
+  window.__validation = { checks, story, extraStats, vf, sf };
+})().catch((e) => { document.getElementById("out").textContent = "ERROR: " + e.stack; });
+</script>
+</body>
+</html>

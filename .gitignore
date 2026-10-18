@@ -1,0 +1,7 @@
+# Local-only: the October file stays off GitHub until add_data.sh pushes it live.
+staging/
+# Editor / tool settings
+.claude/
+.vscode/
+# Personal interview notes stay local
+DEMO_NOTES.md
